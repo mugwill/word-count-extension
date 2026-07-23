@@ -39,30 +39,9 @@ See [`PRIVACY.md`](PRIVACY.md) for the full privacy statement.
 ```
 manifest.json      # MV3 manifest, content script only, no permissions
 src/content.js     # detection + native-toggle automation + SPA re-apply
-icons/             # 16 / 48 / 128 px toolbar & store icons
-store/             # Chrome Web Store listing assets (not shipped in the zip)
-PRIVACY.md         # privacy policy for the store listing
+icons/             # 16 / 48 / 128 px toolbar icons
+PRIVACY.md         # privacy policy
 ```
-
-## Packaging for the Chrome Web Store
-
-Zip only the runtime files (exclude repo/dev files):
-
-```bash
-zip -r word-count-extension.zip manifest.json src icons
-```
-
-Then upload the zip at the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
-(one-time $5 developer registration). Use `store/` assets and `PRIVACY.md` for the listing.
-
-## Limitations
-
-- Relies on the Google Docs menu/dialog DOM, which Google can change without notice.
-  Selectors are matched by **text / role / aria-label** (more durable than class names),
-  but occasional maintenance may be needed if Google reworks the UI.
-- Opening the Word Count dialog to flip the toggle may cause a **brief flash** the first
-  time on a doc. A flicker-free approach (setting the preference directly) is a possible
-  future enhancement.
 
 ## License
 
