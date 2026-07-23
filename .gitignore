@@ -1,0 +1,12 @@
+# Build / packaging output
+*.zip
+dist/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Node (only if tooling is added later)
+node_modules/
