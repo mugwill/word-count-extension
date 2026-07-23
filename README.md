@@ -1,5 +1,7 @@
 # Auto Word Count for Google Docs
 
+https://chromewebstore.google.com/detail/auto-word-count-for-googl/iolffodbgeomobafonhdhblonclindhj?authuser=0&hl=en
+
 A tiny Chromium (Chrome / Edge / Brave) extension that **automatically turns on the
 built-in Google Docs live word counter** on every document — so your word count is
 always shown as you type, without opening **Tools → Word count** each time.
