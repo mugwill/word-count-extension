@@ -318,11 +318,51 @@
   // --------------------------------------------------------------------------
   // The enable flow
   // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Visual suppression
+  // --------------------------------------------------------------------------
+  // We must go through Google's own dialog to flip the native setting, but the
+  // user shouldn't have to see it. While automating, hide the word-count
+  // dialog, its dark backdrop, and any menu popup. This is gated on an
+  // `html.awc-suppressing` class that is ONLY present during our automation, so
+  // a dialog or menu the user opens themselves is never affected.
+  function injectSuppressStyle() {
+    if (document.getElementById('awc-suppress-style')) return;
+    const style = document.createElement('style');
+    style.id = 'awc-suppress-style';
+    style.textContent = [
+      'html.awc-suppressing .modal-dialog,',
+      'html.awc-suppressing .modal-dialog-bg,',
+      'html.awc-suppressing .docs-dialog,',
+      'html.awc-suppressing .docs-dialog-backdrop,',
+      'html.awc-suppressing [class*="modal-dialog-bg"],',
+      'html.awc-suppressing [role="dialog"],',
+      'html.awc-suppressing .goog-menu {',
+      '  opacity: 0 !important;',
+      '  pointer-events: none !important;',
+      '  transition: none !important;',
+      '}',
+    ].join('\n');
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function startSuppress() {
+    injectSuppressStyle();
+    document.documentElement.classList.add('awc-suppressing');
+  }
+
+  function stopSuppress() {
+    document.documentElement.classList.remove('awc-suppressing');
+  }
+
   // Open the Word Count dialog (keyboard first, menu fallback), tick the
-  // checkbox if needed, and close. Returns true if the setting ended up on.
+  // checkbox if needed, and close -- all while the dialog/menu is hidden, so
+  // the user only ever sees the resulting badge. Returns true if the setting
+  // ended up on.
   async function enableWordCount() {
     if (running) return false;
     running = true;
+    startSuppress(); // hide the popup before anything can appear
     let enabled = false;
     try {
       let dialog = await openDialogViaKeyboard();
@@ -340,10 +380,12 @@
       }
 
       dismissDialog(dialog);
+      await sleep(220); // let it fully close before we un-hide
     } catch (err) {
       // Never let an exception escape into the page.
       console.debug('[auto-word-count] enable failed:', err);
     } finally {
+      stopSuppress();
       running = false;
     }
     return enabled;
@@ -390,6 +432,9 @@
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(maybeEnable, delay);
   }
+
+  // Put the hide rule in place up front so a dialog can never paint before it.
+  injectSuppressStyle();
 
   // 1) React to DOM churn (editor mounting, dialogs, doc switches).
   const observer = new MutationObserver(() => scheduleCheck());
