@@ -36,6 +36,7 @@
   let running = false; // an enable pass is in flight
   let currentDocKey = ''; // identifies the doc we're acting on
   let attempts = 0; // attempts against currentDocKey
+  let doneKey = ''; // doc we've confirmed the counter is on for
 
   // --------------------------------------------------------------------------
   // Small DOM helpers
@@ -77,6 +78,114 @@
     for (const type of ['mouseover', 'mousedown', 'mouseup', 'click']) {
       el.dispatchEvent(new MouseEvent(type, opts));
     }
+  }
+
+  function pressEscape() {
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    );
+  }
+
+  // A completed click opens a top-level menu (Docs keeps it open).
+  function openMenu(button) {
+    activate(button);
+  }
+
+  // Trigger a menu item. A plain click is unreliable here because Google's
+  // menu (Closure goog.ui.Menu) fires its action on a hover-then-press
+  // gesture, not a bare click. Reproduce the real pointer path: highlight the
+  // item, then press + release, covering both the pointer and mouse models.
+  function triggerMenuItem(item) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    try {
+      item.scrollIntoView({ block: 'nearest' });
+    } catch (_) {}
+    for (const type of [
+      'pointerover',
+      'mouseover',
+      'pointerenter',
+      'mouseenter',
+      'mousemove',
+    ]) {
+      try {
+        item.dispatchEvent(new MouseEvent(type, opts));
+      } catch (_) {}
+    }
+    for (const type of [
+      'pointerdown',
+      'mousedown',
+      'pointerup',
+      'mouseup',
+      'click',
+    ]) {
+      try {
+        item.dispatchEvent(new MouseEvent(type, opts));
+      } catch (_) {}
+    }
+  }
+
+  // Dispatch the "Word count" shortcut (Ctrl/Cmd+Shift+C). Google reads the
+  // legacy keyCode, which the KeyboardEvent constructor leaves as 0, so we
+  // force it. Fire at every plausible target, including the hidden input
+  // iframe Docs uses to capture keys.
+  function fireShortcut() {
+    const mac = /Mac|iPhone|iPad/i.test(
+      navigator.platform || navigator.userAgent || ''
+    );
+    const targets = new Set([document, document.documentElement, document.body]);
+    const iframe = document.querySelector('.docs-texteventtarget-iframe');
+    if (iframe && iframe.contentDocument) targets.add(iframe.contentDocument);
+    if (document.activeElement) targets.add(document.activeElement);
+
+    for (const type of ['keydown', 'keyup']) {
+      for (const t of targets) {
+        const e = new KeyboardEvent(type, {
+          key: 'c',
+          code: 'KeyC',
+          ctrlKey: !mac,
+          metaKey: mac,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+        try {
+          Object.defineProperty(e, 'keyCode', { get: () => 67 });
+          Object.defineProperty(e, 'which', { get: () => 67 });
+        } catch (_) {}
+        try {
+          t.dispatchEvent(e);
+        } catch (_) {}
+      }
+    }
+  }
+
+  // Preferred path: open the Word Count dialog via the keyboard shortcut, with
+  // no visible menu. Returns the dialog element or null.
+  async function openDialogViaKeyboard() {
+    const existing = findWordCountDialog();
+    if (existing) return existing;
+    fireShortcut();
+    return waitFor(() => findWordCountDialog(), 2500);
+  }
+
+  // Fallback path: navigate Tools -> Word count through the menus.
+  async function openDialogViaMenu() {
+    const tools = await waitFor(
+      () => findTopMenuButton(TOOLS_MENU),
+      MENUBAR_TIMEOUT_MS
+    );
+    if (!tools) return null;
+
+    openMenu(tools);
+    const item = await waitFor(() => findOpenMenuItem(WORD_COUNT_ITEM));
+    if (!item) {
+      pressEscape();
+      return null;
+    }
+    await sleep(120);
+    triggerMenuItem(item);
+    return waitFor(() => findWordCountDialog());
   }
 
   // --------------------------------------------------------------------------
@@ -209,35 +318,27 @@
   // --------------------------------------------------------------------------
   // The enable flow
   // --------------------------------------------------------------------------
+  // Open the Word Count dialog (keyboard first, menu fallback), tick the
+  // checkbox if needed, and close. Returns true if the setting ended up on.
   async function enableWordCount() {
-    if (running) return;
+    if (running) return false;
     running = true;
+    let enabled = false;
     try {
-      const tools = await waitFor(
-        () => findTopMenuButton(TOOLS_MENU),
-        MENUBAR_TIMEOUT_MS
-      );
-      if (!tools) return;
+      let dialog = await openDialogViaKeyboard();
+      if (!dialog) dialog = await openDialogViaMenu();
+      if (!dialog) return false;
 
-      activate(tools);
-      const item = await waitFor(() => findOpenMenuItem(WORD_COUNT_ITEM));
-      if (!item) {
-        // Close the menu we opened.
-        document.body.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
-        );
-        return;
+      await sleep(120); // let the dialog finish rendering
+      const box = findCheckbox(dialog);
+      if (box) {
+        if (!isChecked(box)) {
+          activate(box);
+          await sleep(150); // let Docs register the tick
+        }
+        enabled = isChecked(box);
       }
 
-      activate(item);
-      const dialog = await waitFor(() => findWordCountDialog());
-      if (!dialog) return;
-
-      const box = findCheckbox(dialog);
-      if (box && !isChecked(box)) activate(box);
-
-      // Give Docs a beat to register the tick before we close.
-      await sleep(150);
       dismissDialog(dialog);
     } catch (err) {
       // Never let an exception escape into the page.
@@ -245,6 +346,7 @@
     } finally {
       running = false;
     }
+    return enabled;
   }
 
   // --------------------------------------------------------------------------
@@ -268,12 +370,18 @@
     if (key !== currentDocKey) {
       currentDocKey = key;
       attempts = 0;
+      doneKey = '';
     }
+    if (doneKey === key) return; // already handled this doc
     if (attempts >= MAX_ATTEMPTS_PER_DOC) return;
-    if (isBadgeVisible()) return; // already on -> no-op
+    if (isBadgeVisible()) {
+      doneKey = key; // already on -> latch and stop
+      return;
+    }
 
     attempts++;
-    await enableWordCount();
+    const ok = await enableWordCount();
+    if (ok || isBadgeVisible()) doneKey = key;
   }
 
   // Debounced trigger shared by the observer and the poll.
