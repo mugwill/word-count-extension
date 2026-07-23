@@ -330,14 +330,21 @@
     if (document.getElementById('awc-suppress-style')) return;
     const style = document.createElement('style');
     style.id = 'awc-suppress-style';
+    // Cover the dialog, every known backdrop/scrim variant, and menu popups.
+    // The backdrop is what dims the screen; Google uses several class names for
+    // it across the classic (Closure) and newer (Material) dialogs.
     style.textContent = [
       'html.awc-suppressing .modal-dialog,',
-      'html.awc-suppressing .modal-dialog-bg,',
       'html.awc-suppressing .docs-dialog,',
+      'html.awc-suppressing [role="dialog"],',
+      'html.awc-suppressing .goog-menu,',
+      'html.awc-suppressing .modal-dialog-bg,',
       'html.awc-suppressing .docs-dialog-backdrop,',
       'html.awc-suppressing [class*="modal-dialog-bg"],',
-      'html.awc-suppressing [role="dialog"],',
-      'html.awc-suppressing .goog-menu {',
+      'html.awc-suppressing [class*="dialog-backdrop"],',
+      'html.awc-suppressing [class*="dialog-bg"],',
+      'html.awc-suppressing [class*="backdrop"],',
+      'html.awc-suppressing [class*="scrim"] {',
       '  opacity: 0 !important;',
       '  pointer-events: none !important;',
       '  transition: none !important;',
@@ -355,6 +362,50 @@
     document.documentElement.classList.remove('awc-suppressing');
   }
 
+  // Belt-and-suspenders for the dimming overlay: if a backdrop slips past the
+  // CSS (Google renames these classes), find it structurally and hide it
+  // inline. The scrim is a viewport-covering, fixed/absolute element that is a
+  // sibling of the dialog (or a direct child of body) and is NOT the editor.
+  // Returns a restore() that undoes every inline change.
+  function neutralizeBackdrop(dialog) {
+    const EDITOR_SEL =
+      '#docs-editor, .kix-appview-editor, .docs-material, #docs-chrome, #docs-editor-container';
+    const changed = [];
+    const candidates = new Set();
+    if (dialog.parentElement) {
+      for (const el of dialog.parentElement.children) candidates.add(el);
+    }
+    for (const el of document.body.children) candidates.add(el);
+
+    for (const el of candidates) {
+      if (el === dialog || el.contains(dialog)) continue;
+      if (el.nodeType !== 1) continue;
+      // Never touch the editor surface itself.
+      if (el.matches?.(EDITOR_SEL) || el.querySelector?.(EDITOR_SEL)) continue;
+
+      const cs = getComputedStyle(el);
+      if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+      if (cs.opacity === '0' || cs.visibility === 'hidden') continue;
+
+      const r = el.getBoundingClientRect();
+      const coversViewport =
+        r.width >= window.innerWidth * 0.6 &&
+        r.height >= window.innerHeight * 0.6;
+      if (!coversViewport) continue;
+
+      changed.push([el, el.getAttribute('style')]);
+      el.style.setProperty('opacity', '0', 'important');
+      el.style.setProperty('visibility', 'hidden', 'important');
+    }
+
+    return function restore() {
+      for (const [el, prev] of changed) {
+        if (prev === null) el.removeAttribute('style');
+        else el.setAttribute('style', prev);
+      }
+    };
+  }
+
   // Open the Word Count dialog (keyboard first, menu fallback), tick the
   // checkbox if needed, and close -- all while the dialog/menu is hidden, so
   // the user only ever sees the resulting badge. Returns true if the setting
@@ -363,11 +414,15 @@
     if (running) return false;
     running = true;
     startSuppress(); // hide the popup before anything can appear
+    let restoreBackdrop = null;
     let enabled = false;
     try {
       let dialog = await openDialogViaKeyboard();
       if (!dialog) dialog = await openDialogViaMenu();
       if (!dialog) return false;
+
+      // Kill any dimming overlay the CSS didn't catch, immediately.
+      restoreBackdrop = neutralizeBackdrop(dialog);
 
       await sleep(120); // let the dialog finish rendering
       const box = findCheckbox(dialog);
@@ -385,6 +440,7 @@
       // Never let an exception escape into the page.
       console.debug('[auto-word-count] enable failed:', err);
     } finally {
+      if (restoreBackdrop) restoreBackdrop();
       stopSuppress();
       running = false;
     }
